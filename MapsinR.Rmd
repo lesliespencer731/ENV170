@@ -1,0 +1,356 @@
+---
+title: "Maps in R"
+author: "Leslie Spencer"
+date: "11/15/2021"
+output: html_document
+---
+
+# 1. Get map data for US states
+```{r}
+
+library(tidyverse)
+
+us_states<-map_data("state")
+?map_data
+head(us_states)
+dim(us_states)
+summary(us_states)
+unique(us_states$region)
+
+# maps for us state counties are also available
+mi_counties <- map_data("county", "michigan") %>% 
+  select(lon = long, lat, group, id = subregion)
+head(mi_counties)
+
+ma_counties <- map_data("county", "massachusetts") %>% 
+  select(lon = long, lat, group, id = subregion)
+head(ma_counties)
+dim(ma_counties)
+unique(ma_counties$id)
+class(ma_counties)
+
+```
+
+# 2. Create a simple US map
+```{r}
+
+# 2a: show simple map
+p <- ggplot(us_states,aes(x = long, y = lat, group = group)) +
+  geom_polygon(fill = "white", color = "black")
+p
+
+# 2b: 
+p <- ggplot(us_states,aes(x = long, y = lat, group = group, fill = region)) 
+p # base layer
+p + geom_polygon(color = "gray90", size = 0.1)
+p + geom_polygon(color = "gray90", size = 0.1) +
+  guides(fill = FALSE) # remove legend
+
+# 2c: change projection
+# The above map is in Mercator projection. Below we change to Albers projection:
+p <- ggplot(us_states,aes(x = long, y = lat, group = group, fill = region)) 
+p + geom_polygon(color = "gray90", size = 0.1) +
+  coord_map(projection = "albers", lat0 = 39, lat1 = 45) + guides(fill = FALSE)
+# Play around with values for lat0 and lat1 to see how it changes the shape:
+p + geom_polygon(color = "gray90", size = 0.1) +
+  coord_map(projection = "albers", lat0 = 0, lat1 = 0) + guides(fill = FALSE)
+
+
+
+```
+
+# 3. Import and format in US state lead levels data
+```{r}
+
+stlead<-read.csv("C:/Users/lesli/Box/ENV170/In_Class/Week10/CDClead.csv",
+                 fileEncoding = "UTF-8-BOM")
+names(stlead)
+head(stlead)
+
+# Remove commas and % signs in all data columns:
+stlead[c(3:4,6,8,10:15)]<-as.numeric(apply(stlead[c(3:4,6,8,10:15)], 2, function(x) gsub(",","",x)))
+stlead[c(5,7,9)]<-as.numeric(apply(stlead[c(5,7,9)], 2, function(x) gsub("%","",x)))
+
+# For which year did the most states submit data?
+# First, pull out only rows for which there are data in the children <5 years old tested column:
+getNAs <- stlead %>% group_by(Year,State) %>% summarize(!is.na(N_childrenlessthan72mos))
+names(getNAs) = c("Year","State","DataPresent")
+getNAs
+
+# Convert from long to wide format. Note that you can also use the spread() function here.
+getNAs2<-pivot_wider(getNAs, names_from = Year, values_from = DataPresent )
+getNAs2
+
+# Get count of the number of states for which there are data (i.e., the value = TRUE) for each year:
+?apply
+apply(getNAs2[2:7], 2, function(x) length(which(x) == TRUE))
+
+# We’ll use 2015 for our maps. Create a new dataframe (‘tibble’ in dplyr) with only the 2015 data:
+stlead2<-stlead %>% filter(Year == 2015)
+
+?names
+
+```
+
+# 4. Add state-level lead data to US map
+```{r}
+
+# 4a: Merge CDC data to map data
+head(us_states)
+us_states$region <- str_to_title(us_states$region)
+head(us_states)
+head(stlead2)
+class(us_states)
+class(stlead2)
+
+# change column name to state
+names(us_states)[names(us_states)=="region"]<-"State"
+names(us_states)
+head(us_states)
+
+# merge us map & lead data frames
+us_states_lead<-left_join(us_states, stlead2)
+head(us_states_lead)
+
+# 4b: Map 2015 lead data by state
+# map by the percentage of children with BLL >= 5 microg/dL
+p <- ggplot(us_states_lead,aes(x = long, y = lat, group = group, fill = Percent_BLL_greq_5microgperdL)) 
+p1 <- p + geom_polygon(color = "gray90", size = 0.1) +
+  coord_map(projection = "albers", lat0 = 39, lat1 = 45)
+p1
+# a lot of states did not submit data
+# PA has the highest percentage
+
+# 4c: create a function called theme_map() to make the map prettier
+theme_map<-function(base_size = 9, base_family = ""){
+  require(grid)
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(axis.line = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_blank(),
+          panel.background = element_blank(),
+          panel.border = element_blank(),
+          panel.grid = element_blank(),
+          panel.spacing = unit(0, "lines"),
+          plot.background = element_blank(),
+          legend.justification = c(0,0),
+          legend.position = c(0,0)
+    )
+}
+
+# apply the new function to make the map prettier
+p <- ggplot(us_states_lead,aes(x = long, y = lat, group = group, fill = Percent_BLL_greq_5microgperdL)) +
+  geom_polygon(color = "gray90", size = 0.1) +
+  coord_map(projection = "albers", lat0 = 39, lat1 = 45) 
+
+p1 <- p + labs(title = "2015 Lead levels by state") +
+  theme_map() + labs(fill = "Percent of children \nwith BLL ≥ 5 µg/dL" ) +
+  theme(legend.position = "bottom")
+p1
+
+# 4d save new map
+ggsave("C:/Users/lesli/Box/ENV170/In_Class/Week10/USleadbyState2015.pdf",p1)
+
+
+```
+# 5. Create an interactive map! 
+
+```{r}
+
+# install.packages("plotly")
+library(plotly)
+
+# 5a: creating interactive map
+ggplotly(p1)
+
+# 5b: Format the map
+
+p3 <- ggplot(us_states_lead,aes(x = long, y = lat, group = group, fill = Percent_BLL_greq_5microgperdL)) +
+  geom_polygon(aes(text = paste(State, "\nBLL ≥5 µg/dL:",Percent_BLL_greq_5microgperdL)), color = "gray90", size = 0.1) +
+  coord_map(projection = "albers", lat0 = 39, lat1 = 45) +
+  labs(title = "2015 Child Lead levels by state") +
+  theme_map() + 
+  labs(fill = "Percent of children with BLL ≥ 5 µg/dL" ) +
+  theme(legend.position='none')
+ggplotly(p3, tooltip = "text")
+
+# 5c: save interactive map
+
+# call map to object
+uslead <- plotly::ggplotly(p3)
+# save to file
+htmlwidgets::saveWidget(uslead, "C:/Users/lesli/Box/ENV170/In_Class/Week10/uslead.html") #error
+
+```
+
+# 6. Plotting spatial data with ggplot
+Example with MA & 2012-2017 county lead data
+
+```{r}
+
+library(rgdal)
+library(raster)
+
+#6A: Import & format MA county data
+MAcounties <-readOGR("C:/Users/lesli/Box/ENV170/In_Class/Week10/MAcounties/COUNTIESSURVEY_POLYM.shp")
+class(MAcounties)
+crs(MAcounties)
+MAcounties2 <- spTransform(MAcounties,crs("+proj=longlat +datum=WGS84"))
+crs(MAcounties2)
+
+# gplot will only work with a dataframe, not a spatial dataframe, so we have to convert it in a way that it can be accepted by ggplot:
+c10 <- fortify(MAcounties2)
+class(MAcounties2)
+c10d <- cbind(c10, MAcounties2@data[c10$id,])
+class(c10d)
+dim(c10d)
+names(c10d)
+
+# 6b: Plot MA counties
+pMA <- ggplot(c10d,aes(long, lat, group = group, fill = COUNTY)) 
+
+pMA2 <- pMA + geom_polygon(color = "gray90", size = 0.1) +
+  guides(fill = FALSE) +
+  labs(x = "Longitude", y = "Latitude")
+
+pMA2
+
+# 6c: Add points to map in ggplot
+# read in mock points
+
+locs<-read.csv("C:/Users/lesli/Box/ENV170/In_Class/Week10/locationdata.csv")
+head(locs)
+
+# add to map
+
+ggplot() +
+  geom_polygon(data = c10d,aes(long, lat, group = group, fill = COUNTY),color = "gray90", size = 0.1) +
+  geom_point(data = locs, aes(x = loncurr, y = latcurr), shape = 4, size = 1.5) +
+  guides(fill = FALSE) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+# 6d: change color scheme
+
+ggplot() +
+  geom_polygon(data = c10d,aes(long, lat, group = group, fill = COUNTY),color = "gray90", size = 0.1) +
+  geom_point(data = locs, aes(x = loncurr, y = latcurr), color = "darkorange", shape = 4, size = 1.5) +
+  guides(fill = FALSE) +
+  labs(x = "Longitude", y = "Latitude") +
+  scale_fill_viridis_d(direction = -1) +
+  theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+
+# 6e: 6E: Add percentage BLLs ≥ 5 µg/dL by county
+# Read in and format 2012-2017 MA county lead data
+
+MAlead<-read.csv("C:/Users/lesli/Box/ENV170/In_Class/Week10/MACountyLead_20122017.csv", fileEncoding = "UTF-8-BOM")
+head(MAlead)
+
+# Remove commas and percentage signs from numeric data columns
+MAlead[c(5,6,8,10,12:17)]<-as.numeric(apply(MAlead[c(5,6,8,10,12:17)], 2, function(x) gsub(",","",x)))
+MAlead[c(7,9,11)]<-as.numeric(apply(MAlead[c(7,9,11)], 2, function(x) gsub("%","",x)))
+
+head(MAlead,10)
+summary(MAlead)
+names(MAlead)
+
+MAlead<-MAlead %>% separate(COUNTY, c("COUNTY","Delete"),sep = " ")
+MAlead<-MAlead %>% dplyr::select(-one_of("Delete"))
+head(c10d)
+
+head(MAlead)
+
+c10d$COUNTY<-str_to_title(c10d$COUNTY)
+MAlead2<-pivot_wider(MAlead %>% dplyr::select(Year,COUNTY, Percent_BLL_greq_5microgperdL), names_from = Year, values_from = Percent_BLL_greq_5microgperdL)
+head(MAlead2)
+
+MAmaplead<-left_join(c10d,MAlead2,by = "COUNTY")
+head(MAmaplead)
+
+names(MAmaplead)[names(MAmaplead)=="COUNTY"]<-"County"
+names(MAmaplead)[21:26]<-paste("YR",names(MAmaplead)[21:26],sep = "")
+names(MAmaplead)
+
+# Plot 2017 lead levels with appropriately scaled color theme for continuous data:
+ggplot(MAmaplead,aes(x = long, y = lat, group = group, fill = YR2017)) +
+  geom_polygon(color = "gray90", size = 0.1) +
+  labs(title = "2017 MA child lead levels by county") + labs(fill = "Percent of children with BLL ≥ 5 µg/dL" ) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(legend.position = "bottom")
+
+# 6F: create an interactive plot
+p4<-ggplot(MAmaplead,aes(x = long, y = lat, group = group, fill = YR2017)) +
+  geom_polygon(aes(text = paste(County, "\nBLL ≥5 µg/dL:",YR2017)),color = "gray90", size = 0.1) +
+  labs(title = "2017 MA child lead levels by county") + labs(fill = "Percent of children with BLL ≥ 5 µg/dL" ) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(legend.position = "none")
+ggplotly(p4, tooltip = "text")
+
+MAlead <- plotly::ggplotly(p4)
+htmlwidgets::saveWidget(uslead, "C:/Users/lesli/Box/ENV170/In_Class/Week10/MAlead.html")
+
+# 6G. Plot MA county lead data from map_data()
+# Example plotting MA counties as point data from the ma_counties dataframe:
+
+head(ma_counties)
+ggplot(ma_counties, aes(lon, lat)) + 
+  geom_point(size = .25, show.legend = FALSE) +
+  coord_quickmap()
+# fill as polygons
+ggplot(ma_counties, aes(lon, lat, group = group)) +
+  geom_polygon(fill = "white", colour = "grey50") + 
+  coord_quickmap()
+
+```
+
+```{r}
+
+# Challenge
+
+ma_counties
+# ma_counties$id = str_to_title(ma_counties$id)
+head(ma_counties)
+head(MAlead2)
+class(ma_counties)
+
+names(ma_counties)[names(ma_counties)=="id"]<-"COUNTY"
+head(ma_counties)
+
+mass_lead <- left_join(ma_counties, MAlead2)
+class(mass_lead)
+
+names(mass_lead)[names(mass_lead)=="2012"]<-"YR2012"
+head(mass_lead)
+
+p5<-ggplot(mass_lead,aes(x = lon, y = lat, group = group, fill = YR2012)) +
+  geom_polygon(color = "gray90", size = 0.1) +
+  labs(title = "2012 MA child lead levels by county") + labs(fill = "Percent of children with BLL ≥ 5 µg/dL" ) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(legend.position = "bottom")
+p5 ## fix this - why are they all the same color?
+
+
+# Plot 2017 lead levels with appropriately scaled color theme for continuous data:
+ggplot(MAmaplead,aes(x = long, y = lat, group = group, fill = YR2017)) +
+  geom_polygon(color = "gray90", size = 0.1) +
+  labs(title = "2017 MA child lead levels by county") + labs(fill = "Percent of children with BLL ≥ 5 µg/dL" ) +
+  labs(x = "Longitude", y = "Latitude") +
+  theme_bw() +
+  theme(panel.border = element_blank(), panel.grid.major = element_blank(),panel.grid.minor = element_blank(), axis.line = element_line(colour = "black")) +
+  theme(legend.position = "bottom")
+
+```
+
+# 7. Plotting raster maps with a legend
+Import clipped NLCD data for example:
+
+
